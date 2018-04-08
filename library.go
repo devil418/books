@@ -133,7 +133,10 @@ func (db *Library) ImportBook(book Book, move bool) error {
 		return errors.Wrap(err, "Moving or copying book")
 	}
 
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return errors.Wrap(err, "commiting transaction on import")
+	}
 	log.Printf("Imported book: %s: %s, ID = %d", book.Author, book.Title, book.Id)
 
 	return nil

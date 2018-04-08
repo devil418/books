@@ -12,6 +12,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/kapmahc/epub"
 	"github.com/pkg/errors"
 	"github.com/pkg/xattr"
 )
@@ -107,4 +108,27 @@ func (b *Book) CalculateHash() error {
 	hash := fmt.Sprintf("%x", hasher.Sum(nil))
 	b.Hash = hash
 	return nil
+}
+
+func ParseEpub(filename string) (Book, error) {
+	book := Book{}
+	e, err := epub.Open(filename)
+	if err != nil {
+		return book, err
+	}
+	authors := []string{}
+	for _, author := range e.Opf.Metadata.Creator {
+		authors = append(authors, author.Data)
+	}
+	var title string
+	if len(e.Opf.Metadata.Title) == 0 {
+		title = ""
+	} else {
+		title = e.Opf.Metadata.Title[0]
+	}
+	authors_s := strings.Join(authors, " & ")
+	book.Author = authors_s
+	book.Title = title
+	book.Extension = "epub"
+	return book, nil
 }

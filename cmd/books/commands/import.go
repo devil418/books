@@ -22,6 +22,7 @@ var compiled []*regexp.Regexp
 var regexpNames []string
 var outputTmpl *template.Template
 var recursive bool
+var useMetadata bool
 
 // importCmd represents the import command
 var importCmd = &cobra.Command{
@@ -54,6 +55,7 @@ func init() {
 	importCmd.Flags().StringSliceP("regexp", "r", []string{}, "List of regular expressions to use during import")
 	importCmd.Flags().BoolP("move", "m", false, "Move files instead of copying them")
 	importCmd.Flags().BoolVarP(&recursive, "recursive", "R", false, "Recurse into subdirectories")
+importCmd.Flags().BoolVar(&useMetadata, "metadata", false, "Use metadata when possible")
 	viper.BindPFlag("move", importCmd.Flags().Lookup("move"))
 	viper.BindPFlag("default_regexps", importCmd.Flags().Lookup("regexp"))
 }
@@ -134,6 +136,7 @@ func importBooks(root string, recursive bool, library *books.Library) error {
 func importBook(path string, library *books.Library) error {
 	var book books.Book
 	var matched bool
+if !useMetadata || !strings.HasSuffix(strings.ToLower(path), ".epub") {
 	for i, c := range compiled {
 		if book, matched = books.ParseFilename(path, c); matched {
 			book.RegexpName = regexpNames[i]
@@ -148,7 +151,15 @@ func importBook(path string, library *books.Library) error {
 	title, tags := books.SplitTitleAndTags(book.Title)
 	book.Title = title
 	book.Tags = tags
-
+} else {
+var err error
+book, err = books.ParseEpub(path)
+if err != nil {
+return errors.Wrap(err, "parsing book from epub metadata")
+}
+book.OriginalFilename = path
+book.RegexpName = "metadata"
+}
 	fi, err := os.Stat(path)
 	if err != nil {
 		return errors.Wrap(err, "Get file info for book")
