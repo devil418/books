@@ -920,6 +920,63 @@ func authorsEqual(a, b []string) bool {
 	return true
 }
 
+// isLastFile returns true if the book associated with the passed file has no
+// other associated files.
+func (lib *Library) IsLastFile(bf BookFile) (last bool, err error) {
+	bookID, err := lib.GetBookIDByFilename(bf.CurrentFilename)
+	if err != nil {
+		return false, err
+	}
+
+	books, err := lib.GetBooksByID([]int64{bookID})
+	if err != nil {
+		return false, err
+	}
+
+	if len(books) != 1 {
+		panic("Internal database inconsistency, this should NOT happen.")
+	}
+	return len(books[0].Files) == 1, nil
+}
+
+//  DeleteFile deletes the passed file.
+// If the book associated with it has no more files, it's also deleted, along
+// with any authors and tags that wouldn't have had any associated books after
+// the deletion.
+func (lib *Library) DeleteFile(bf BookFile) (err error) {
+	tx, err := lib.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Returning something assigns that to our named return value implicitly.
+		if err != nil {
+			tx.Rollback()
+		} else {
+			tx.Commit()
+		}
+	}()
+
+	// We need to check this now because the wrong result might be returned when
+	// the file is already gone.
+	last, err := lib.IsLastFile(bf)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec("delete from files where id = ?", bf.ID)
+	if err != nil {
+		return err
+	}
+	
+	if err := os.Remove(path.Join(lib.booksRoot, bf.CurrentFilename)); err != nil {
+	return err
+	}
+	
+	_ = last
+	return nil
+}
+
 // joinInt64s is like strings.Join, but for slices of int64.
 // SQLite limits the number of variables that can be passed to a bound query.
 // Pass int64s directly to IN (…) as a work-around.
