@@ -870,6 +870,24 @@ func mergeBooks(tx *sql.Tx, ids []int64) error {
 	return nil
 }
 
+// GetIDByFilename returns a file ID given a filename relative to books root.
+func (lib *Library) GetIDByFilename(fn string) (ID int64, err error) {
+	tx, err := lib.Begin()
+	if err != nil {
+		return 0, errors.Wrap(err, "cannot start transaction")
+	}
+	defer tx.Rollback()
+
+	row := tx.QueryRow("select id from files where filename = ?", fn)
+	if err := row.Scan(&ID); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, errors.New("no file with that name exists")
+		}
+		return 0, err
+	}
+	return ID, nil
+}
+
 // GetBookIDByFilename returns a book ID given a filename relative to books root.
 func (lib *Library) GetBookIDByFilename(fn string) (int64, error) {
 	tx, err := lib.Begin()
