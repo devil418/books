@@ -964,16 +964,22 @@ func (lib *Library) DeleteFile(bf BookFile) (err error) {
 		return err
 	}
 
-	_, err = tx.Exec("delete from files where id = ?", bf.ID)
-	if err != nil {
+	if err := lib.deleteFile(tx, bf); err != nil {
 		return err
 	}
-	
-	if err := os.Remove(path.Join(lib.booksRoot, bf.CurrentFilename)); err != nil {
-	return err
-	}
-	
+
 	_ = last
+	return nil
+}
+
+func (lib *Library) deleteFile(tx *sql.Tx, bf BookFile) error {
+	if _, err := tx.Exec("delete from files where id = ?", bf.ID); err != nil {
+		return err
+	}
+
+	if err := os.Remove(path.Join(lib.booksRoot, bf.CurrentFilename)); err != nil {
+		log.Printf("Cannot delete %s from the file system: %s\nYou should delete the file manually.", bf.CurrentFilename, err)
+	}
 	return nil
 }
 
