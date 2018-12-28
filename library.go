@@ -244,9 +244,6 @@ func (lib *Library) ImportBook(book Book, move bool) error {
 }
 
 func indexBookInSearch(tx *sql.Tx, book *Book, createNew bool) error {
-	if !createNew && len(book.Files) != 1 {
-		return errors.New("Book to index must contain only one file")
-	}
 	bf := book.Files[0]
 	joinedTags := strings.Join(bf.Tags, " ")
 	if createNew {
@@ -957,6 +954,13 @@ func (lib *Library) DeleteFile(bf BookFile) (err error) {
 		}
 	}()
 
+	if err := lib.deleteFile(tx, bf); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (lib *Library) deleteFile(tx *sql.Tx, bf BookFile) error {
 	// We need to check this now because the wrong result might be returned when
 	// the file is already gone.
 	last, err := lib.IsLastFile(bf)
@@ -964,15 +968,31 @@ func (lib *Library) DeleteFile(bf BookFile) (err error) {
 		return err
 	}
 
-	if err := lib.deleteFile(tx, bf); err != nil {
+	var bID int64
+	row := tx.QueryRow("select book_id from files where id = ?", bf.ID)
+	if err := row.Scan(&bID); err != nil {
 		return err
 	}
 
-	_ = last
-	return nil
-}
+	books, err := lib.GetBooksByID([]int64{bID})
+	if err != nil {
+		return err
+	}
+	if len(books) != 1 {
+		return errors.New("when dleeting from fts, wrong NO of books returned")
+	}
+	b := books[0]
 
-func (lib *Library) deleteFile(tx *sql.Tx, bf BookFile) error {
+	if last { //Delete the associated book
+		if err := lib.deleteBook(tx, b); err != nil {
+			return errors.Wrap(err, "cannot delete book")
+		}
+	}
+
+	if err := cleanupTags(tx, bf.ID); err != nil {
+		return errors.Wrap(err, "error when cleaning up tags")
+	}
+
 	if _, err := tx.Exec("delete from files where id = ?", bf.ID); err != nil {
 		return err
 	}
@@ -980,7 +1000,72 @@ func (lib *Library) deleteFile(tx *sql.Tx, bf BookFile) error {
 	if err := os.Remove(path.Join(lib.booksRoot, bf.CurrentFilename)); err != nil {
 		log.Printf("Cannot delete %s from the file system: %s\nYou should delete the file manually.", bf.CurrentFilename, err)
 	}
+
+	// Delete file from search:
+	// This code is a bit of a hack, but there's no easy way to do it better.
+	// Deleting a file the proper way would involve figuring out which tags, extensions etc.  aren't relevant to that book any more and removing them.
+	// This is not an easy thing to do, as it would involve scanning through all the files and breaking the strings from
+	// the fts table into parts. It's not worth it and the performance win, if any, would be negligible.
+	// Instead we delete the whole book from fts and just re-index it.
+	if err := lib.deleteBookFromSearch(tx, b); err != nil {
+		return err
+	}
+	return indexBookInSearch(tx, &b, true)
+}
+
+// cleanupTags removes any tags not associated with any other files.
+func cleanupTags(tx *sql.Tx, id int64) error {
+	// Get all the gags for the current file:
+	rows, err := tx.Query("select tag_id from files_tags where file_id = ?", id)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var tags []int64
+	for rows.Next() {
+		var tag int64
+		if err := rows.Scan(&tag); err != nil {
+			return err
+		}
+		tags = append(tags, tag)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// tags that are only associated with one file should be deleted.
+	var toDel []int64
+	for _, t := range tags {
+		// Check how many files this tag is associated with.
+		row := tx.QueryRow("select count(*) from files_tags where tag_id = ?", t)
+		var count int64
+		if err := row.Scan(&count); err != nil {
+			return errors.Wrap(err, "error when getting the count of files associated with a tag")
+		}
+		if count == 1 {
+			toDel = append(toDel, t)
+		}
+	}
+
+	if toDel != nil {
+		toDelS := joinInt64s(toDel, ",")
+		log.Printf("Deleting tags %s", toDelS)
+		if _, err := tx.Exec("delete from tags where id in (" + toDelS + ")"); err != nil {
+			return errors.Wrap(err, "error when deleting tags")
+		}
+	}
 	return nil
+}
+
+func (lib *Library) deleteBook(tx *sql.Tx, b Book) error {
+	log.Printf("Deleting book %d", b.ID)
+	return nil
+}
+
+func (lib *Library) deleteBookFromSearch(tx *sql.Tx, b Book) error {
+	_, err := tx.Exec("delete from books_fts where docid=?", b.ID)
+	return err
 }
 
 // joinInt64s is like strings.Join, but for slices of int64.

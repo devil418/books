@@ -93,7 +93,9 @@ If you're sure that you want to go ahead, pass the -y flag.`)
 	}
 
 	log.Printf("Deleting file %s (%d)", bf.CurrentFilename, bf.ID)
-	lib.DeleteFile(bf)
+	if err := lib.DeleteFile(bf); err != nil {
+		fmt.Fprintf(os.Stderr, "Error deleting file: %s\n", err)
+	}
 
 }
 
