@@ -961,25 +961,41 @@ func (lib *Library) DeleteFile(bf BookFile) (err error) {
 }
 
 func (lib *Library) deleteFile(tx *sql.Tx, bf BookFile) error {
-	// We need to check this now because the wrong result might be returned when
-	// the file is already gone.
+	// Retrieve the information needed for cleanup that won't be available after the file is gone.	
 	last, err := lib.IsLastFile(bf)
 	if err != nil {
 		return err
 	}
 
+	// get the book ID:
 	var bID int64
 	row := tx.QueryRow("select book_id from files where id = ?", bf.ID)
 	if err := row.Scan(&bID); err != nil {
 		return err
 	}
 
-	books, err := lib.GetBooksByID([]int64{bID})
+	// Remove the tags not associated with any other file:
+	if err := cleanupTags(tx, bf.ID); err != nil {
+		return errors.Wrap(err, "error when cleaning up tags")
+	}
+
+	// Delete file from the database:
+	if _, err := tx.Exec("delete from files where id = ?", bf.ID); err != nil {
+		return err
+	}
+
+	// delete from disk:
+	if err := os.Remove(path.Join(lib.booksRoot, bf.CurrentFilename)); err != nil {
+		log.Printf("Cannot delete %s from the file system: %s\nYou should delete the file manually.", bf.CurrentFilename, err)
+	}
+
+	// Get the book the file was associated with:
+		books, err := lib.GetBooksByID([]int64{bID})
 	if err != nil {
 		return err
 	}
 	if len(books) != 1 {
-		return errors.New("when dleeting from fts, wrong NO of books returned")
+		return errors.New("wrong NO of books returned")
 	}
 	b := books[0]
 
@@ -988,22 +1004,10 @@ func (lib *Library) deleteFile(tx *sql.Tx, bf BookFile) error {
 			return errors.Wrap(err, "cannot delete book")
 		}
 	}
-
-	if err := cleanupTags(tx, bf.ID); err != nil {
-		return errors.Wrap(err, "error when cleaning up tags")
-	}
-
-	if _, err := tx.Exec("delete from files where id = ?", bf.ID); err != nil {
-		return err
-	}
-
-	if err := os.Remove(path.Join(lib.booksRoot, bf.CurrentFilename)); err != nil {
-		log.Printf("Cannot delete %s from the file system: %s\nYou should delete the file manually.", bf.CurrentFilename, err)
-	}
-
+	
 	// Delete file from search:
 	// This code is a bit of a hack, but there's no easy way to do it better.
-	// Deleting a file the proper way would involve figuring out which tags, extensions etc.  aren't relevant to that book any more and removing them.
+	// Deleting it the proper way would involve figuring out which tags, extensions etc.  aren't relevant to that book any more and removing them.
 	// This is not an easy thing to do, as it would involve scanning through all the files and breaking the strings from
 	// the fts table into parts. It's not worth it and the performance win, if any, would be negligible.
 	// Instead we delete the whole book from fts and just re-index it.
@@ -1015,7 +1019,7 @@ func (lib *Library) deleteFile(tx *sql.Tx, bf BookFile) error {
 
 // cleanupTags removes any tags not associated with any other files.
 func cleanupTags(tx *sql.Tx, id int64) error {
-	// Get all the gags for the current file:
+	// Get all the tags for the current file:
 	rows, err := tx.Query("select tag_id from files_tags where file_id = ?", id)
 	if err != nil {
 		return err
@@ -1060,12 +1064,59 @@ func cleanupTags(tx *sql.Tx, id int64) error {
 
 func (lib *Library) deleteBook(tx *sql.Tx, b Book) error {
 	log.Printf("Deleting book %d", b.ID)
+	if err := lib.cleanupAuthors(tx, b); err != nil {
+		return errors.Wrap(err, "cannot clean up authors")
+	}
+	if _, err := tx.Exec("delete from books where id=?", b.ID); err != nil {
+		return errors.Wrap(err, "can't delete book")
+	}
+
+	if err := lib.deleteBookFromSearch(tx, b); err != nil {
+		return errors.Wrap(err, "cannot delete the book from the search index")
+	}
 	return nil
 }
 
 func (lib *Library) deleteBookFromSearch(tx *sql.Tx, b Book) error {
 	_, err := tx.Exec("delete from books_fts where docid=?", b.ID)
 	return err
+}
+
+func (lib *Library) cleanupAuthors(tx *sql.Tx, b Book) error {
+	rows, err := tx.Query("select author_id from books_authors where book_id=?", b.ID)
+	if err != nil {
+		return errors.Wrap(err, "cannot retrieve authors for book")
+	}
+	defer rows.Close()
+	authors := make([]int64, 0)
+	for rows.Next() {
+		var author int64
+		if err := rows.Scan(&author); err != nil {
+			return errors.Wrap(err, "cannot scan author")
+		}
+		authors = append(authors, author)
+	}
+
+	// Find authors that have no other books associated with them:
+	toDel := make([]int64, 0)
+	for _, author := range authors {
+		row := tx.QueryRow("select count(*) from books_authors where author_id=?", author)
+		var count int
+		if err := row.Scan(&count); err != nil {
+			return errors.Wrap(err, "error retrieving count of associated books")
+		}
+		if count == 1 {
+			toDel = append(toDel, author)
+		}
+	}
+
+	authorsStr := joinInt64s(toDel, ",")
+	log.Printf("Deleting authors: %s ", authorsStr)
+	_, err = tx.Exec("delete from authors where id in (" + authorsStr + ")")
+	if err != nil {
+		return errors.Wrap(err, "cannot delete authors")
+	}
+	return nil
 }
 
 // joinInt64s is like strings.Join, but for slices of int64.
