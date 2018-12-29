@@ -867,7 +867,7 @@ func authorsEqual(a, b []string) bool {
 	return true
 }
 
-// isLastFile returns true if the book associated with the passed file has no
+// IsLastFile returns true if the book associated with the passed file has no
 // other associated files.
 func (lib *Library) IsLastFile(bf BookFile) (last bool, err error) {
 	bookID, err := lib.GetBookIDByFilename(bf.CurrentFilename)
@@ -886,7 +886,7 @@ func (lib *Library) IsLastFile(bf BookFile) (last bool, err error) {
 	return len(books[0].Files) == 1, nil
 }
 
-//  DeleteFile deletes the passed file.
+// DeleteFile deletes the passed file.
 // If the book associated with it has no more files, it's also deleted, along
 // with any authors and tags that wouldn't have had any associated books after
 // the deletion.

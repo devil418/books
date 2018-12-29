@@ -66,7 +66,7 @@ func delFileFunc(cmd *cobra.Command, args []string) {
 
 	files, err := lib.GetFilesByID([]int64{ID})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cannot get book file with ID %d: %s\n", err)
+		fmt.Fprintf(os.Stderr, "cannot get book file with ID %d: %s\n", ID, err)
 		os.Exit(1)
 	}
 
@@ -120,7 +120,7 @@ func getIDOrFilename(args []string) (ID int64, name string, err error) {
 	}
 
 	if filename == "" {
-		return 0, "", errors.New("Neither a filename or an ID was provided.")
+		return 0, "", errors.New("neither a filename or an ID was provided")
 	}
 	return 0, filename, nil
 }
